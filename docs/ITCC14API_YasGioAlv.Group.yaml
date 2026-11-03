@@ -3,16 +3,18 @@ info:
   title: XU EcoLab API
   version: 1.0.0
   description: >
-    REST API for XU EcoLab, a web app where XU COMPSTUD students, instructors
-    and staff report energy waste in the computer labs, and lab technicians
-    (admins) verify and resolve each report. All responses are JSON.
-    Report photos are uploaded to Cloudinary by the frontend, and only the
-    resulting image URL is sent to this API.
+    REST API for XU EcoLab, a web application through which Xavier University
+    Computer Studies students, instructors and staff report energy waste in the
+    Computer Studies laboratories, and laboratory technicians (administrators)
+    verify and resolve each report. There are six laboratories, A to F.
+    All requests and responses use JSON. Report photographs are uploaded to
+    Cloudinary by the frontend, and only the resulting image URL is submitted
+    to this API.
   contact:
-    name: "[Group name]"
+    name: YasGioAlv
 servers:
   - url: http://localhost:5000/api
-    description: Local development
+    description: Local development server
   - url: https://xu-ecolab.example.com/api
     description: Deployed server (placeholder)
 tags:
@@ -23,9 +25,9 @@ tags:
   - name: Reports
     description: Energy waste reports (main resource, full CRUD)
   - name: Status Updates
-    description: Admin verification and resolution history of a report
-  - name: Rooms
-    description: Computer labs and rooms that reports refer to
+    description: Verification and resolution history of a report
+  - name: Laboratories
+    description: The Computer Studies laboratories (A to F) to which reports refer
 security:
   - bearerAuth: []
 paths:
@@ -33,7 +35,7 @@ paths:
     post:
       tags: [Auth]
       summary: Register a new user account
-      description: Creates an account with the role "user". Admin accounts are created by an existing admin or seeded in the database.
+      description: Creates an account with the role "user". Administrator accounts are created directly in the database.
       operationId: registerUser
       security: []
       requestBody:
@@ -86,7 +88,7 @@ paths:
   /users/me:
     get:
       tags: [Users]
-      summary: Get the logged-in user's profile
+      summary: Retrieve the profile of the logged-in user
       operationId: getCurrentUser
       responses:
         '200':
@@ -106,23 +108,22 @@ paths:
       parameters:
         - name: status
           in: query
-          description: Only return reports with this status
+          description: Return only reports with this status
           schema:
             $ref: '#/components/schemas/ReportStatus'
         - name: wasteType
           in: query
-          description: Only return reports of this waste type
+          description: Return only reports of this waste type
           schema:
             $ref: '#/components/schemas/WasteType'
-        - name: roomId
+        - name: laboratory
           in: query
-          description: Only return reports for this room
+          description: Return only reports for this laboratory
           schema:
-            type: integer
-            example: 3
+            $ref: '#/components/schemas/LaboratoryCode'
         - name: mine
           in: query
-          description: If true, only return reports made by the logged-in user
+          description: If true, return only reports submitted by the logged-in user
           schema:
             type: boolean
             default: false
@@ -155,7 +156,7 @@ paths:
     post:
       tags: [Reports]
       summary: Submit a new energy waste report
-      description: The report starts with the status "pending" and belongs to the logged-in user.
+      description: The report is created with the status "pending" and belongs to the logged-in user.
       operationId: createReport
       requestBody:
         required: true
@@ -164,10 +165,10 @@ paths:
             schema:
               $ref: '#/components/schemas/ReportInput'
             example:
-              roomId: 3
+              laboratory: C
               wasteType: air_conditioner
-              description: AC still running at full cold, room empty since lunch.
-              photoUrl: https://res.cloudinary.com/demo/image/upload/lab3-ac.jpg
+              description: The air conditioning unit remained in operation after the laboratory was vacated.
+              photoUrl: https://res.cloudinary.com/demo/image/upload/laboratory-c-ac.jpg
       responses:
         '201':
           description: Report created
@@ -179,14 +180,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
   /reports/{reportId}:
     parameters:
       - $ref: '#/components/parameters/ReportId'
     get:
       tags: [Reports]
-      summary: Get one report
+      summary: Retrieve a single report
       operationId: getReport
       responses:
         '200':
@@ -202,7 +201,7 @@ paths:
     put:
       tags: [Reports]
       summary: Edit a report
-      description: A user can edit only their own report while its status is "pending". An admin can edit any report.
+      description: A user may edit only their own report while its status is "pending". An administrator may edit any report.
       operationId: updateReport
       requestBody:
         required: true
@@ -211,9 +210,9 @@ paths:
             schema:
               $ref: '#/components/schemas/ReportInput'
             example:
-              roomId: 3
-              wasteType: lights_fans
-              description: Lights and ceiling fans left on after the 4 PM class.
+              laboratory: E
+              wasteType: air_conditioner, pc_monitor, lights
+              description: The lights and air conditioning unit remained on after the 12 PM class.
               photoUrl: null
       responses:
         '200':
@@ -233,7 +232,7 @@ paths:
     delete:
       tags: [Reports]
       summary: Delete a report
-      description: A user can delete only their own report while its status is "pending". An admin can delete any report.
+      description: A user may delete only their own report while its status is "pending". An administrator may delete any report.
       operationId: deleteReport
       responses:
         '204':
@@ -249,8 +248,8 @@ paths:
       - $ref: '#/components/parameters/ReportId'
     patch:
       tags: [Status Updates]
-      summary: Verify or resolve a report (admin only)
-      description: Changes the report status and records the change, with an optional note, in its status history.
+      summary: Verify or resolve a report (administrator only)
+      description: Changes the report status and records the change, with an optional note, in the report's status history.
       operationId: updateReportStatus
       requestBody:
         required: true
@@ -260,7 +259,7 @@ paths:
               $ref: '#/components/schemas/StatusChangeRequest'
             example:
               status: resolved
-              note: Technician turned off the AC and set the timer.
+              note: The technician switched off the air conditioning unit and set the timer.
       responses:
         '200':
           description: Status changed
@@ -281,7 +280,7 @@ paths:
       - $ref: '#/components/parameters/ReportId'
     get:
       tags: [Status Updates]
-      summary: Get the status history of a report
+      summary: Retrieve the status history of a report
       operationId: listStatusUpdates
       responses:
         '200':
@@ -296,121 +295,41 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-  /rooms:
+  /laboratories:
     get:
-      tags: [Rooms]
-      summary: List rooms
-      operationId: listRooms
-      parameters:
-        - name: building
-          in: query
-          description: Only return rooms in this building
-          schema:
-            type: string
-            example: ICT Building
+      tags: [Laboratories]
+      summary: List the laboratories
+      description: Returns the six Computer Studies laboratories, A to F. The laboratories are fixed reference data prepared in the database.
+      operationId: listLaboratories
       responses:
         '200':
-          description: All rooms
+          description: All laboratories
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Room'
+                  $ref: '#/components/schemas/Laboratory'
         '401':
           $ref: '#/components/responses/Unauthorized'
-    post:
-      tags: [Rooms]
-      summary: Add a room (admin only)
-      operationId: createRoom
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RoomInput'
-            example:
-              name: Computer Lab 3
-              building: ICT Building
-              floor: 2
-      responses:
-        '201':
-          description: Room created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Room'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /rooms/{roomId}:
+  /laboratories/{laboratoryCode}:
     parameters:
-      - $ref: '#/components/parameters/RoomId'
+      - $ref: '#/components/parameters/LaboratoryCode'
     get:
-      tags: [Rooms]
-      summary: Get one room
-      operationId: getRoom
+      tags: [Laboratories]
+      summary: Retrieve a single laboratory
+      operationId: getLaboratory
       responses:
         '200':
-          description: The room
+          description: The laboratory
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Room'
+                $ref: '#/components/schemas/Laboratory'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-    put:
-      tags: [Rooms]
-      summary: Edit a room (admin only)
-      operationId: updateRoom
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RoomInput'
-            example:
-              name: Computer Lab 3
-              building: ICT Building
-              floor: 3
-      responses:
-        '200':
-          description: Room updated
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Room'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    delete:
-      tags: [Rooms]
-      summary: Delete a room (admin only)
-      description: A room that still has reports cannot be deleted.
-      operationId: deleteRoom
-      responses:
-        '204':
-          description: Room deleted, no content returned
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
 components:
   securitySchemes:
     bearerAuth:
@@ -423,18 +342,17 @@ components:
       name: reportId
       in: path
       required: true
-      description: ID of the report
+      description: Identifier of the report
       schema:
         type: integer
         example: 12
-    RoomId:
-      name: roomId
+    LaboratoryCode:
+      name: laboratoryCode
       in: path
       required: true
-      description: ID of the room
+      description: Letter of the laboratory, from A to F
       schema:
-        type: integer
-        example: 3
+        $ref: '#/components/schemas/LaboratoryCode'
   responses:
     BadRequest:
       description: The request body or a parameter is missing or invalid
@@ -446,7 +364,7 @@ components:
             error: Validation failed
             details: wasteType must be one of pc_monitor, air_conditioner, lights_fans, other_electronics, other
     Unauthorized:
-      description: Missing, invalid or expired token, or wrong login details
+      description: The token is missing, invalid or expired, or the login details are incorrect
       content:
         application/json:
           schema:
@@ -454,13 +372,13 @@ components:
           example:
             error: Authentication required
     Forbidden:
-      description: The logged-in user is not allowed to do this
+      description: The logged-in user is not permitted to perform this action
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: You can only change your own pending reports
+            error: Users may modify only their own pending reports
     NotFound:
       description: The requested resource does not exist
       content:
@@ -476,7 +394,7 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: Email is already registered
+            error: Email address is already registered
   schemas:
     Error:
       type: object
@@ -488,11 +406,16 @@ components:
           example: Report not found
         details:
           type: string
-          description: Extra information about what went wrong
+          description: Additional information about the error
     UserRole:
       type: string
-      description: Students, instructors and staff are all "user". Lab technicians are "admin".
+      description: Students, instructors and staff have the role "user". Laboratory technicians have the role "admin".
       enum: [user, admin]
+    LaboratoryCode:
+      type: string
+      description: Letter identifying one of the six laboratories
+      enum: [A, B, C, D, E, F]
+      example: C
     WasteType:
       type: string
       enum: [pc_monitor, air_conditioner, lights_fans, other_electronics, other]
@@ -535,7 +458,7 @@ components:
       properties:
         token:
           type: string
-          description: JWT to send as a Bearer token
+          description: JWT to be sent as a Bearer token
           example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
         user:
           $ref: '#/components/schemas/User'
@@ -559,47 +482,33 @@ components:
           type: string
           format: date-time
           example: '2026-11-03T08:30:00Z'
-    RoomInput:
+    Laboratory:
       type: object
-      required: [name, building]
+      required: [code, name]
       properties:
+        code:
+          $ref: '#/components/schemas/LaboratoryCode'
         name:
           type: string
-          example: Computer Lab 3
-        building:
-          type: string
-          example: ICT Building
-        floor:
-          type: integer
-          example: 2
-    Room:
-      allOf:
-        - type: object
-          required: [id]
-          properties:
-            id:
-              type: integer
-              example: 3
-        - $ref: '#/components/schemas/RoomInput'
+          example: Computer Studies Laboratory C
     ReportInput:
       type: object
-      required: [roomId, wasteType, description]
+      required: [laboratory, wasteType, description]
       properties:
-        roomId:
-          type: integer
-          example: 3
+        laboratory:
+          $ref: '#/components/schemas/LaboratoryCode'
         wasteType:
           $ref: '#/components/schemas/WasteType'
         description:
           type: string
           maxLength: 500
-          example: AC still running at full cold, room empty since lunch.
+          example: The air conditioning unit remained in operation after the laboratory was vacated.
         photoUrl:
           type: string
           format: uri
           nullable: true
-          description: Optional Cloudinary URL of the uploaded photo
-          example: https://res.cloudinary.com/demo/image/upload/lab3-ac.jpg
+          description: Optional Cloudinary URL of the uploaded photograph
+          example: https://res.cloudinary.com/demo/image/upload/laboratory-c-ac.jpg
     Report:
       allOf:
         - type: object
@@ -610,7 +519,7 @@ components:
               example: 12
             userId:
               type: integer
-              description: ID of the user who made the report
+              description: Identifier of the user who submitted the report
               example: 1
             status:
               $ref: '#/components/schemas/ReportStatus'
@@ -650,7 +559,7 @@ components:
         note:
           type: string
           maxLength: 300
-          example: Technician turned off the AC and set the timer.
+          example: The technician switched off the air conditioning unit and set the timer.
     StatusUpdate:
       type: object
       required: [id, reportId, adminId, oldStatus, newStatus, createdAt]
@@ -663,7 +572,7 @@ components:
           example: 12
         adminId:
           type: integer
-          description: ID of the admin who made the change
+          description: Identifier of the administrator who made the change
           example: 2
         oldStatus:
           $ref: '#/components/schemas/ReportStatus'
@@ -671,7 +580,7 @@ components:
           $ref: '#/components/schemas/ReportStatus'
         note:
           type: string
-          example: Technician turned off the AC and set the timer.
+          example: The technician switched off the air conditioning unit and set the timer.
         createdAt:
           type: string
           format: date-time
