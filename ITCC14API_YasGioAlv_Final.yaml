@@ -1,0 +1,1036 @@
+# Revision Summary
+# 1. added admin-only laboratory management: get/post /laboratories and
+#    get/put/delete /laboratories/{laboratorycode}; delete returns 409 when
+#    reports still reference the laboratory. replaced the inconsistent
+#    /rooms resource and roomid fields with the proposal's laboratories and
+#    laboratorycode terminology (laboratory, laboratoryinput schemas).
+# 2. made the admin status-change note required in statuschangerequest and
+#    documented admin-only verification/resolution in patch /reports/{reportid}/status.
+# 3. corrected the report put example to use exactly one wastetype enum value;
+#    wastetype remains a single string, not an array.
+# 4. documented the only allowed transitions (pending -> verified -> resolved),
+#    rejection of all other transitions, and status-history behavior: ordinary
+#    report edits do not create history entries; deleting a report permanently
+#    cascades deletion of its status-update records.
+# 5. clarified report ownership, pending-only user edits/deletes, admin delete
+#    permissions, authentication, validation, and consistent error responses.
+# 6. defined report and laboratory response schemas independently to avoid
+#    additionalProperties conflicts caused by composing request schemas.
+# 7. made the reusable conflict response generic and removed an unsupported
+#    conflict response from report deletion.
+
+openapi: 3.0.3
+info:
+  title: XU EcoLab API
+  version: 1.1.0
+  description: >-
+    REST API for XU EcoLab (LabWatch XU). XU COMPSTUD students, instructors,
+    and staff submit energy-waste reports for computer laboratories. Lab
+    technicians use admin accounts to manage laboratories and move reports
+    through verification and resolution. All API responses are JSON. Report
+    photos are uploaded to Cloudinary by the client; this API stores only the
+    resulting photo URL. Email notifications and analytics dashboards are
+    outside the required core scope.
+  contact:
+    name: YasGioAlv Group
+servers:
+  - url: http://localhost:5000/api
+    description: Local development server
+  - url: https://xu-ecolab.example.com/api
+    description: Deployment URL placeholder; replace before deployment
+
+tags:
+  - name: Auth
+    description: User registration and login
+  - name: Users
+    description: Authenticated account information
+  - name: Reports
+    description: Energy-waste reports and report CRUD
+  - name: Status Updates
+    description: Admin status workflow and report status history
+  - name: Laboratories
+    description: Computer laboratory records managed by admins
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a user account
+      description: >-
+        Creates a regular user account. The client cannot choose a role.
+        New registrations always receive role user. Admin accounts must be
+        provisioned by the system/database or an authorized administrator;
+        public registration cannot create an admin account.
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              name: Juan Dela Cruz
+              email: juan@xu.edu.ph
+              password: <PLACEHOLDER_PASSWORD>
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                id: 1
+                name: Juan Dela Cruz
+                email: juan@xu.edu.ph
+                role: user
+                createdAt: '2026-11-14T08:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and receive an access token
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: juan@xu.edu.ph
+              password: <PLACEHOLDER_PASSWORD>
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              example:
+                token: <PLACEHOLDER_JWT>
+                user:
+                  id: 1
+                  name: Juan Dela Cruz
+                  email: juan@xu.edu.ph
+                  role: user
+                  createdAt: '2026-11-14T08:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Get the authenticated user's profile
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current user's profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                id: 1
+                name: Juan Dela Cruz
+                email: juan@xu.edu.ph
+                role: user
+                createdAt: '2026-11-14T08:30:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /reports:
+    get:
+      tags: [Reports]
+      summary: List energy-waste reports
+      description: >-
+        Returns reports from all users, newest first. Every authenticated user
+        may view report records and their current statuses. Use filters and
+        pagination to narrow the list. Set mine=true to return only reports
+        created by the authenticated user.
+      operationId: listReports
+      parameters:
+        - name: status
+          in: query
+          description: Filter by current report status
+          required: false
+          schema:
+            $ref: '#/components/schemas/ReportStatus'
+        - name: wasteType
+          in: query
+          description: Filter by one waste type
+          required: false
+          schema:
+            $ref: '#/components/schemas/WasteType'
+        - name: laboratoryCode
+          in: query
+          description: Filter by laboratory code
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 30
+            example: ICT-LAB-03
+        - name: mine
+          in: query
+          description: If true, return only reports created by the authenticated user
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: page
+          in: query
+          description: Page number, starting at 1
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Maximum number of reports per page
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Paginated report list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportList'
+              example:
+                data:
+                  - id: 12
+                    userId: 1
+                    laboratoryCode: ICT-LAB-03
+                    wasteType: air_conditioner
+                    description: Air conditioner left running in an empty room.
+                    photoUrl: null
+                    status: pending
+                    createdAt: '2026-11-14T08:30:00Z'
+                    updatedAt: '2026-11-14T08:30:00Z'
+                page: 1
+                limit: 20
+                total: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Reports]
+      summary: Submit an energy-waste report
+      description: >-
+        Creates a report owned by the authenticated user. The server assigns
+        the userId, pending status, and timestamps; clients cannot set these
+        fields. laboratoryCode must identify an existing laboratory. wasteType
+        is exactly one allowed enum value. photoUrl is optional and may be null.
+      operationId: createReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportInput'
+            example:
+              laboratoryCode: ICT-LAB-03
+              wasteType: air_conditioner
+              description: AC still running although the room is empty.
+              photoUrl: https://res.cloudinary.com/demo/image/upload/lab3-ac.jpg
+      responses:
+        '201':
+          description: Report created with pending status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                id: 12
+                userId: 1
+                laboratoryCode: ICT-LAB-03
+                wasteType: air_conditioner
+                description: AC still running although the room is empty.
+                photoUrl: https://res.cloudinary.com/demo/image/upload/lab3-ac.jpg
+                status: pending
+                createdAt: '2026-11-14T08:30:00Z'
+                updatedAt: '2026-11-14T08:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reports/{reportId}:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    get:
+      tags: [Reports]
+      summary: Get a report by ID
+      operationId: getReport
+      responses:
+        '200':
+          description: Requested report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                id: 12
+                userId: 1
+                laboratoryCode: ICT-LAB-03
+                wasteType: air_conditioner
+                description: AC still running although the room is empty.
+                photoUrl: null
+                status: pending
+                createdAt: '2026-11-14T08:30:00Z'
+                updatedAt: '2026-11-14T08:30:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Reports]
+      summary: Replace an existing pending report
+      description: >-
+        Replaces the editable report fields. A regular user may update only
+        their own report and only while its status is pending. Admins may
+        moderate and delete any report but do not use this operation to bypass
+        the status workflow. The request must contain all ReportInput fields.
+        Editing a report does not create, modify, or erase status-update
+        history; it only updates the report's updatedAt timestamp. The report
+        status and owner cannot be changed through this operation.
+      operationId: updateReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportInput'
+            example:
+              laboratoryCode: ICT-LAB-03
+              wasteType: pc_monitor
+              description: Several computer monitors were left on after class.
+              photoUrl: null
+      responses:
+        '200':
+          description: Report replaced; status and status history remain unchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                id: 12
+                userId: 1
+                laboratoryCode: ICT-LAB-03
+                wasteType: pc_monitor
+                description: Several computer monitors were left on after class.
+                photoUrl: null
+                status: pending
+                createdAt: '2026-11-14T08:30:00Z'
+                updatedAt: '2026-11-14T09:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Reports]
+      summary: Delete a report
+      description: >-
+        A regular user may delete only their own pending report. An admin may
+        delete any report regardless of status. Deletion is permanent: the
+        report and all of its associated status_updates records are deleted
+        together (database cascade), so no orphan status history remains.
+        A deleted report and its history cannot be retrieved through this API.
+      operationId: deleteReport
+      responses:
+        '204':
+          description: Report and its associated status history permanently deleted; no response body
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /reports/{reportId}/status:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    patch:
+      tags: [Status Updates]
+      summary: Verify or resolve a report (admin only)
+      description: >-
+        Only an authenticated admin/lab technician may change report status.
+        The only permitted transitions are pending -> verified and verified
+        -> resolved, in that order. Direct pending -> resolved transitions,
+        reverse transitions, and transitions from resolved are rejected with
+        409 Conflict. A non-empty note is required for every transition.
+        Each successful transition updates the report status and updatedAt,
+        then appends one immutable StatusUpdate containing the admin, old and
+        new statuses, note, and timestamp. Failed transitions create no history.
+      operationId: updateReportStatus
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusChangeRequest'
+            examples:
+              verify:
+                summary: Verify a pending report
+                value:
+                  status: verified
+                  note: Inspected the laboratory and confirmed the AC was left running.
+              resolve:
+                summary: Resolve a verified report
+                value:
+                  status: resolved
+                  note: Turned off the AC after the session.
+      responses:
+        '200':
+          description: Status changed and a status-history record was created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+              example:
+                id: 12
+                userId: 1
+                laboratoryCode: ICT-LAB-03
+                wasteType: air_conditioner
+                description: AC still running although the room is empty.
+                photoUrl: null
+                status: verified
+                createdAt: '2026-11-14T08:30:00Z'
+                updatedAt: '2026-11-14T09:00:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /reports/{reportId}/status-updates:
+    parameters:
+      - $ref: '#/components/parameters/ReportId'
+    get:
+      tags: [Status Updates]
+      summary: Get a report's status history
+      description: >-
+        Returns status transitions for the report in chronological order.
+        History is appended only by successful admin status changes. Ordinary
+        report edits do not add history entries. If the report is permanently
+        deleted, its associated history is deleted with it.
+      operationId: listStatusUpdates
+      responses:
+        '200':
+          description: Status history, oldest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatusUpdate'
+              example:
+                - id: 5
+                  reportId: 12
+                  adminId: 2
+                  oldStatus: pending
+                  newStatus: verified
+                  note: Inspected and confirmed the issue.
+                  createdAt: '2026-11-14T09:00:00Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /laboratories:
+    get:
+      tags: [Laboratories]
+      summary: List laboratories
+      description: >-
+        Returns all active computer laboratories. Any authenticated user may
+        view this list to select a laboratory when submitting a report.
+      operationId: listLaboratories
+      parameters:
+        - name: building
+          in: query
+          description: Filter laboratories by building name
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+            example: ICT Building
+      responses:
+        '200':
+          description: Laboratory list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Laboratory'
+              example:
+                - laboratoryCode: ICT-LAB-03
+                  name: Computer Lab 3
+                  building: ICT Building
+                  floor: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Laboratories]
+      summary: Create a laboratory (admin only)
+      description: Only an authenticated admin/lab technician may add a laboratory.
+      operationId: createLaboratory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LaboratoryInput'
+            example:
+              laboratoryCode: ICT-LAB-03
+              name: Computer Lab 3
+              building: ICT Building
+              floor: 2
+      responses:
+        '201':
+          description: Laboratory created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Laboratory'
+              example:
+                laboratoryCode: ICT-LAB-03
+                name: Computer Lab 3
+                building: ICT Building
+                floor: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /laboratories/{laboratoryCode}:
+    parameters:
+      - $ref: '#/components/parameters/LaboratoryCode'
+    get:
+      tags: [Laboratories]
+      summary: Get a laboratory by code
+      operationId: getLaboratory
+      responses:
+        '200':
+          description: Requested laboratory
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Laboratory'
+              example:
+                laboratoryCode: ICT-LAB-03
+                name: Computer Lab 3
+                building: ICT Building
+                floor: 2
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [Laboratories]
+      summary: Replace a laboratory record (admin only)
+      description: >-
+        Replaces the laboratory's name, building, and floor. The laboratoryCode
+        in the URL is the immutable identifier and is not changed by this operation.
+        Existing reports continue referencing the same laboratoryCode after an edit.
+      operationId: updateLaboratory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LaboratoryUpdateInput'
+            example:
+              name: Computer Laboratory 3
+              building: ICT Building
+              floor: 2
+      responses:
+        '200':
+          description: Laboratory updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Laboratory'
+              example:
+                laboratoryCode: ICT-LAB-03
+                name: Computer Laboratory 3
+                building: ICT Building
+                floor: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Laboratories]
+      summary: Delete a laboratory (admin only)
+      description: >-
+        A laboratory cannot be deleted while one or more reports reference its
+        laboratoryCode. The server returns 409 Conflict and leaves the
+        laboratory and all reports unchanged. An admin must first ensure that
+        no reports reference the laboratory; report deletion follows the
+        separately documented report deletion rules. No cascading deletion of
+        reports is performed when deleting a laboratory.
+      operationId: deleteLaboratory
+      responses:
+        '204':
+          description: Laboratory deleted; no response body
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        JWT access token returned by POST /auth/login. Send it in the
+        Authorization header as Bearer <token>. Admin-only operations require
+        the authenticated token to have role admin.
+
+  parameters:
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      description: Numeric ID of the report
+      schema:
+        type: integer
+        minimum: 1
+        example: 12
+    LaboratoryCode:
+      name: laboratoryCode
+      in: path
+      required: true
+      description: Unique code identifying the laboratory
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 30
+        pattern: '^[A-Za-z0-9_-]+$'
+        example: ICT-LAB-03
+
+  responses:
+    BadRequest:
+      description: Request body or parameter is missing or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Validation failed
+            details: The request contains missing or invalid fields.
+    Unauthorized:
+      description: Authentication is missing, invalid, or expired; or login credentials are incorrect
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Authentication required
+            details: Provide a valid Bearer access token.
+    Forbidden:
+      description: Authenticated account lacks permission for the requested action
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Forbidden
+            details: Only administrators may manage laboratories or change report status.
+    NotFound:
+      description: Requested report or laboratory does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Resource not found
+            details: No report or laboratory matches the supplied identifier.
+    Conflict:
+      description: The request conflicts with an existing resource or its current state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Conflict
+            details: The supplied identifier may already be in use, or the requested operation conflicts with existing data.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          minLength: 1
+          description: Short error message
+          example: Validation failed
+        details:
+          type: string
+          description: Additional explanation of the error
+          example: wasteType must be exactly one allowed value.
+
+    UserRole:
+      type: string
+      description: Students, instructors, and staff use user; lab technicians use admin.
+      enum: [user, admin]
+      example: user
+
+    WasteType:
+      type: string
+      description: A report describes one waste category only.
+      enum: [pc_monitor, air_conditioner, lights_fans, other_electronics, other]
+      example: air_conditioner
+
+    ReportStatus:
+      type: string
+      description: Current lifecycle state of a report.
+      enum: [pending, verified, resolved]
+      example: pending
+
+    StatusTransitionTarget:
+      type: string
+      description: >-
+        Allowed target statuses for PATCH /reports/{reportId}/status.
+        The server additionally checks the current status: pending may become
+        verified, and verified may become resolved.
+      enum: [verified, resolved]
+      example: verified
+
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Juan Dela Cruz
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          example: juan@xu.edu.ph
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+          example: <PLACEHOLDER_PASSWORD>
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: juan@xu.edu.ph
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+          example: <PLACEHOLDER_PASSWORD>
+
+    AuthResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: JWT access token; placeholder only in documentation examples
+          example: <PLACEHOLDER_JWT>
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      required: [id, name, email, role, createdAt]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          example: 1
+        name:
+          type: string
+          example: Juan Dela Cruz
+        email:
+          type: string
+          format: email
+          example: juan@xu.edu.ph
+        role:
+          $ref: '#/components/schemas/UserRole'
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-14T08:30:00Z'
+
+    LaboratoryInput:
+      type: object
+      additionalProperties: false
+      required: [laboratoryCode, name, building]
+      properties:
+        laboratoryCode:
+          type: string
+          minLength: 1
+          maxLength: 30
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Unique, immutable laboratory identifier
+          example: ICT-LAB-03
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Computer Lab 3
+        building:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: ICT Building
+        floor:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          example: 2
+
+    LaboratoryUpdateInput:
+      type: object
+      additionalProperties: false
+      required: [name, building]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Computer Laboratory 3
+        building:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: ICT Building
+        floor:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          example: 2
+
+    Laboratory:
+      type: object
+      additionalProperties: false
+      required: [laboratoryCode, name, building]
+      properties:
+        laboratoryCode:
+          type: string
+          minLength: 1
+          maxLength: 30
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Unique, immutable laboratory identifier
+          example: ICT-LAB-03
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: Computer Lab 3
+        building:
+          type: string
+          minLength: 2
+          maxLength: 100
+          example: ICT Building
+        floor:
+          type: integer
+          minimum: 0
+          maximum: 100
+          nullable: true
+          example: 2
+
+    ReportInput:
+      type: object
+      additionalProperties: false
+      required: [laboratoryCode, wasteType, description]
+      properties:
+        laboratoryCode:
+          type: string
+          minLength: 1
+          maxLength: 30
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Must match an existing laboratory's laboratoryCode
+          example: ICT-LAB-03
+        wasteType:
+          $ref: '#/components/schemas/WasteType'
+        description:
+          type: string
+          minLength: 5
+          maxLength: 500
+          example: AC still running although the room is empty.
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: Optional Cloudinary URL; null or omitted when no photo is attached
+          example: https://res.cloudinary.com/demo/image/upload/lab3-ac.jpg
+
+    Report:
+      type: object
+      additionalProperties: false
+      required: [id, userId, laboratoryCode, wasteType, description, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          example: 12
+        userId:
+          type: integer
+          minimum: 1
+          description: ID of the user who submitted the report; assigned by the server
+          example: 1
+        laboratoryCode:
+          type: string
+          minLength: 1
+          maxLength: 30
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Must match an existing laboratory's laboratoryCode
+          example: ICT-LAB-03
+        wasteType:
+          $ref: '#/components/schemas/WasteType'
+        description:
+          type: string
+          minLength: 5
+          maxLength: 500
+          example: AC still running although the room is empty.
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: Optional Cloudinary URL; null or omitted when no photo is attached
+          example: https://res.cloudinary.com/demo/image/upload/lab3-ac.jpg
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-14T08:30:00Z'
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2026-11-14T09:00:00Z'
+
+    ReportList:
+      type: object
+      required: [data, page, limit, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+        page:
+          type: integer
+          minimum: 1
+          example: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 20
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of reports matching the filters
+          example: 42
+
+    StatusChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [status, note]
+      properties:
+        status:
+          $ref: '#/components/schemas/StatusTransitionTarget'
+        note:
+          type: string
+          minLength: 3
+          maxLength: 300
+          description: Required explanation entered by the admin for every verification or resolution
+          example: Inspected the laboratory and confirmed the AC was left running.
+
+    StatusUpdate:
+      type: object
+      required: [id, reportId, adminId, oldStatus, newStatus, note, createdAt]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          example: 5
+        reportId:
+          type: integer
+          minimum: 1
+          example: 12
+        adminId:
+          type: integer
+          minimum: 1
+          description: ID of the admin who performed the transition
+          example: 2
+        oldStatus:
+          $ref: '#/components/schemas/ReportStatus'
+        newStatus:
+          $ref: '#/components/schemas/ReportStatus'
+        note:
+          type: string
+          minLength: 3
+          maxLength: 300
+          example: Inspected the laboratory and confirmed the AC was left running.
+        createdAt:
+          type: string
+          format: date-time
+          example: '2026-11-14T09:00:00Z'
